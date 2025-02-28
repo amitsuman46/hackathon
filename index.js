@@ -14,7 +14,7 @@ app.get('/meet/join', async (req, res) => {
   const { code } = req.query;
   console.log("Code",code);
   await joinGoogleMeet(code);
-  res.send('Joining Google Meet...',code);
+  res.send('Joining Google Meet...');
 });
 
 app.get('/summary/send', async (req, res) => {

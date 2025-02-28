@@ -183,17 +183,14 @@
 
 //------------------------------------------------------------
 const puppeteer = require('puppeteer');
-const path = require('path');
+const say = require('say'); // For text-to-speech using say.js
 
 const joinGoogleMeet = async (meetCode) => {
   try {
     // Path to local Chrome installation
     const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-    const userDataDir = 'C:/Users/amit.suman/AppData/Local/Google/Chrome/User Data/Default';
-    
-    // Use path.resolve() for cross-platform compatibility
-    const fakeAudioFile = path.resolve(__dirname, '../output-chrome.wav');
-    console.log('Fake audio file path:', fakeAudioFile);
+    const userDataDir = 'C:/Users/rajkumar.selvaraj/AppData/Local/Google/Chrome/User Data/Default';
+
     const browser = await puppeteer.launch({
       executablePath: chromePath,  // Use local Chrome
       headless: false,             // Show the browser
@@ -206,7 +203,6 @@ const joinGoogleMeet = async (meetCode) => {
         '--start-maximized',
         '--use-fake-ui-for-media-stream',  // Auto-allow camera and microphone
         '--disable-blink-features=AutomationControlled', // Avoid detection
-        `--use-file-for-fake-audio-capture=${fakeAudioFile}`
       ]
     });
 
@@ -227,11 +223,23 @@ const joinGoogleMeet = async (meetCode) => {
     }
 
     // Click the 'Ask to Join' button
-    const askToJoinButton = await page.waitForSelector('button[jsname="Qx7uuf"]', { timeout: 60000 });
-    await askToJoinButton.click();
+    //const askToJoinButton = await page.waitForSelector('button[jsname="Qx7uuf"]', { timeout: 60000 });
+    //await askToJoinButton.click();
 
     console.log('Successfully requested to join the meeting!');
+
+    // Wait for the bot to fully join the meeting
+    await page.waitForTimeout(5000);
+
+    // Make the bot speak
     console.log('The bot is now speaking in the Google Meet call.');
+     say.speak('Hello Team, Good morning everyone. How was your weekend?', null, 1.0, (err) => {
+       if (err) {
+         return console.error('Error speaking:', err);
+       }
+       console.log('Bot has finished speaking.');
+     });
+
   } catch (error) {
     console.error('Error joining Google Meet:', error);
   }
