@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { joinGoogleMeet } = require('./services/meetService');
+const { joinGoogleMeet } = require('./services/googleMeetService');
 const { processTranscript } = require('./services/nlpService');
 const { sendSummaryEmail } = require('./services/emailService');
 const { generateSpeech } = require('./services/ttsService');
