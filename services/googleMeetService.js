@@ -8,11 +8,11 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 // Configuration
 const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe'; // Adjust path as needed
 const userDataDir = 'C:/Users/rajkumar.selvaraj/AppData/Local/Google/Chrome/User Data/Default'; // Change based on your profile
-const dataFolder = path.join(__dirname, 'data');
-if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
+// const dataFolder = path.join(__dirname, 'data');
+// if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
 
 // Load API Key
-const API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyAqRtjEVwJi_2pWr4_H33-sdHi5fgs-LmM';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 // Initialize Gemini API
 const googleAI = new GoogleGenerativeAI(API_KEY);
 const geminiConfig = {
@@ -38,6 +38,19 @@ let conversationState = {
 // Function to join Google Meet
 const joinGoogleMeet = async (meetCode) => {
     try {
+        // Define folder path based on the meeting code
+        const dataFolder = path.join(__dirname, 'data', meetCode);
+
+        // If the folder exists, delete it and recreate
+        if (fs.existsSync(dataFolder)) {
+            fs.rmSync(dataFolder, { recursive: true, force: true });
+            console.log(`Deleted existing folder: ${dataFolder}`);
+        }
+
+        // Create a new folder
+        fs.mkdirSync(dataFolder, { recursive: true });
+        console.log(`Created new folder: ${dataFolder}`);
+        
         console.log('Launching browser...');
         // Path to local Chrome installation
         const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
@@ -73,7 +86,7 @@ const joinGoogleMeet = async (meetCode) => {
             await page.keyboard.press('Enter');
             await page.waitForTimeout(3000);
         }
-        
+
         // Speak Welcome Message
         console.log('Bot is speaking...');
         say.speak("Hello Team, Good morning! Let's start our Scrum meeting.", null, 1.0, async () => {
@@ -85,17 +98,14 @@ const joinGoogleMeet = async (meetCode) => {
             for (const memberDet of teamTasks) {
                 const member = memberDet?.assignee;
                 say.speak(`${member}, please provide your task update.`, null, 1.0, async () => {
-                    console.log(`Waiting for ${member}'s response...`);
                     const audioFile = path.join(dataFolder, `${member}.mp3`);
                     //await recordAudio(audioFile, 15); // Record for 15 seconds
                     await recordAudioUntilSilence(audioFile, 3)
                         .then(() => console.log('Audio recording complete'))
                         .catch((err) => console.error(err));
-                        console.log(new Date());
                     // Transcribe the response
-                    const transcription = await transcribeAudio(audioFile)
+                    const transcription = await transcribeAudio(audioFile, dataFolder)
                         .then((transcription) => {
-                            console.log(new Date());
                             console.log('Transcription completed. All files saved in: ***** ', dataFolder, transcription);
                             return transcription;
                         })
@@ -114,24 +124,6 @@ const joinGoogleMeet = async (meetCode) => {
     }
 };
 
-// Function to record audio using FFmpeg
-const recordAudio = (filePath, duration) => {
-    return new Promise((resolve, reject) => {
-        const command = `ffmpeg -f dshow -i audio="Stereo Mix (Realtek Audio)" -t ${duration} "${filePath}"`;
-
-        console.log(`Recording audio to ${filePath}...`);
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error('Error recording audio:', error.message);
-                reject(error);
-            } else {
-                console.log(`Audio recorded: ${filePath}`);
-                resolve(filePath);
-            }
-        });
-    });
-};
-
 const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
     return new Promise((resolve, reject) => {
         console.log(`Recording audio to ${filePath}...`);
@@ -140,11 +132,11 @@ const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
             "ffmpeg",
             "-f", "dshow",
             "-i", 'audio="CABLE Output (VB-Audio Virtual Cable)"', // Adjust your input source
-            "-rtbufsize", "100M", 
-            "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`, 
+            "-rtbufsize", "100M",
+            "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`,
             "-t", "300", // Max recording time of 5 minutes
-            "-preset", "ultrafast", 
-            "-acodec", "libmp3lame", 
+            "-preset", "ultrafast",
+            "-acodec", "libmp3lame",
             filePath
         ];
 
@@ -155,7 +147,7 @@ const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
 
             if (output.includes("silence_start")) {
                 console.log("Silence detected! Stopping recording...");
-                
+
                 // Kill process properly
                 if (process.pid) {
                     console.log(`Killing process PID: ${process.pid}`);
@@ -186,10 +178,11 @@ const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
 
 
 // Function to transcribe audio using Whisper
-const transcribeAudio = (audioFile) => {
+const transcribeAudio = (audioFile, dataFolder) => {
     return new Promise((resolve, reject) => {
         //const command = `whisper "${audioFile}" --model small --output_dir "${dataFolder}"`;
-        const command = `whisper "${audioFile}" --model tiny.en --output_dir "${dataFolder}" --language English --fp16 False`;
+        //const command = `whisper "${audioFile}" --model tiny.en --output_dir "${dataFolder}" --language English --fp16 False`;
+        const command = `whisper "${audioFile}" --model tiny.en --output_dir "${dataFolder}" --language English --fp16 False --output_format txt`;
 
         exec(command, (error, stdout, stderr) => {
             if (error) {
@@ -207,7 +200,6 @@ const processWithGemini = async (text, memberDetail) => {
     // Call Gemini AI API here and return response (currently returns dummy text)
     // return `Got it, thank you! Your update has been noted.`;
     // Generate a task-specific follow-up based on the response
-    console.log(`${text} **** text *****`)
     const prompt = `You are a Scrum Master conducting a standup meeting. 
 The team member ${memberDetail.assignee} is working on the task: "${memberDetail.task}".
 Here is their update: "${text}".
@@ -224,7 +216,6 @@ Here is their update: "${text}".
         //     nextQuestion = await askTeamMember();
         // }
         //res.json({ message: geminiResponse + " " + nextQuestion });
-        console.log(`Gemini Response ****: ${geminiResponse}`)
         return geminiResponse;
     } catch (error) {
         console.error('Error fetching response from Gemini API:', error);
