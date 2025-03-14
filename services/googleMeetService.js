@@ -12,7 +12,7 @@ const userDataDir = 'C:/Users/rajkumar.selvaraj/AppData/Local/Google/Chrome/User
 // if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
 
 // Load API Key
-const API_KEY = process.env.GEMINI_API_KEY || '';
+const API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyAqRtjEVwJi_2pWr4_H33-sdHi5fgs-LmM';
 // Initialize Gemini API
 const googleAI = new GoogleGenerativeAI(API_KEY);
 const geminiConfig = {
@@ -231,95 +231,90 @@ const joinGoogleMeet = async (meetCode) => {
         // };
 
         const askForUpdates = async () => {
-            console.log('Starting to ask for team updates...');
+            console.log('🚀 Starting to ask for team updates...');
 
             while (currentIndex < participants.length) {
                 const participant = participants[currentIndex];
-                console.log(`Asking ${participant} for task update...`);
+                console.log(`🗣️ Asking ${participant} for task update...`);
 
-                // Find task for the current participant
-                const taskDetail = teamTasks.find((task) => task.assignee.toLowerCase() === participant.toLowerCase());
+                const taskDetail = teamTasks.find(
+                    (task) => task.assignee.toLowerCase() === participant.toLowerCase()
+                );
 
-                if (taskDetail) {
-                    try {
-                        // Step 1: Speak to the member
-                        console.log(`Speaking to ${participant}...`);
-                        await speak(`${participant}, please provide an update on your task: ${taskDetail.task}.`);
+                try {
+                    // Step 1: Speak to the member
+                    const taskMessage = taskDetail
+                        ? `${participant}, please provide an update on your task: ${taskDetail.task}.`
+                        : `${participant}, if you have any updates to share in this standup, please speak up and provide them.`;
 
-                        const audioFile = path.join(dataFolder, `${participant}.mp3`);
+                    console.log(`🎙️ Speaking to ${participant}...`);
+                    await speak(taskMessage);
 
-                        // Step 2: Record audio until silence
-                        console.log(`Recording response from ${participant}...`);
-                        await recordAudioUntilSilence(audioFile, 3);
-                        console.log(`Audio recording complete for ${participant}`);
-
-                        // Step 3: Transcribe the audio
-                        console.log(`Transcribing audio for ${participant}...`);
-                        const transcription = await transcribeAudio(audioFile, dataFolder);
-                        console.log(`${participant}'s response: ${transcription}`);
-
-                        if (transcription) {
-                            // Step 4: Process the response with Gemini AI
-                            console.log(`Processing response for ${participant} with Gemini AI...`);
-                            const prompt = `You are a Scrum Master conducting a standup meeting. 
-The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
-Here is their update: "${transcription}".
-1. If the response is **average**, acknowledge it positively and shortly.`;
-                            const botResponse = await processWithGeminiTaskUpdate(prompt);
-                            console.log(`Bot response for ${participant}: ${botResponse}`);
-
-                            // Step 5: Speak the bot response
-                            await speak(botResponse);
-                        } else {
-                            console.error(`No transcription available for ${participant}`);
-                        }
-                    } catch (error) {
-                        console.error(`Error processing update for ${participant}:`, error);
-                    }
-                } else {
-                    console.log(`No task assigned for ${participant}`);
-                    await speak(`${participant}, If you have any updates to share in this standup, please speak up and provide them.`);
+                    // Step 2: Record audio until silence (⚠️ Handle failure gracefully)
                     const audioFile = path.join(dataFolder, `${participant}.mp3`);
+                    console.log(`🎧 Recording response from ${participant}...`);
 
-                    console.log(`Recording response from ${participant}...`);
-                    console.log(`Audio recording complete for ${participant}`);
-                    console.log(`Transcribing audio for ${participant}...`);
+                    try {
+                        await recordAudioUntilSilence(audioFile, 3); // ❗ Fails → Skip participant
+                        console.log(`✅ Audio recording complete for ${participant}`);
+                    } catch (error) {
+                        console.warn(`⚠️ Recording failed for ${participant}:`, error.message);
+                        // 🏃‍♂️ Skip to next participant
+                        moveToNextParticipant(participant);
+                        continue;
+                    }
+
+                    // Step 3: Transcribe the audio
+                    console.log(`🔎 Transcribing audio for ${participant}...`);
                     const transcription = await transcribeAudio(audioFile, dataFolder);
+                    if (!transcription) {
+                        console.warn(`⚠️ No transcription available for ${participant}`);
+                        moveToNextParticipant(participant);
+                        continue;
+                    }
                     console.log(`${participant}'s response: ${transcription}`);
 
-                    if (transcription) {
-                        console.log(`Processing response for ${participant} with Gemini AI...`);
-                        const prompt = `You are a Scrum Master conducting a standup meeting. 
-The team member ${participant} need to give some update to the team members and you.
-Here is their update: "${transcription}" and acknowledge it positively and shortly.`;
-                        const botResponse = await processWithGeminiTaskUpdate(prompt);
-                        console.log(`Bot response for ${participant}: ${botResponse}`);
+                    // Step 4: Process the response with Gemini AI
+                    const prompt = taskDetail
+                        ? `You are a Scrum Master conducting a standup meeting. 
+        The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
+        Here is their update: "${transcription}".
+        Acknowledge the update positively and suggest improvements if necessary.`
+                        : `You are a Scrum Master conducting a standup meeting.
+        The team member ${participant} shared the following update: "${transcription}".
+        Acknowledge the update positively and suggest improvements if necessary.`;
 
-                        // Step 5: Speak the bot response
+                    console.log(`🤖 Processing response for ${participant} with Gemini AI...`);
+                    const botResponse = await processWithGeminiTaskUpdate(prompt);
+                    if (botResponse) {
+                        console.log(`💬 Bot response for ${participant}: ${botResponse}`);
                         await speak(botResponse);
                     } else {
-                        console.error(`No transcription available for ${participant}`);
+                        console.warn(`⚠️ No response from Gemini AI for ${participant}`);
                     }
+                } catch (error) {
+                    console.error(`❌ Error processing update for ${participant}:`, error);
                 }
 
-                // ✅ Handle dynamic participant changes  
-                if (currentIndex < participants.length - 1) {
-                    currentIndex++;
-                } else {
-                    // If the list has changed, update the index dynamically
-                    currentIndex = participants.findIndex((p) => p === participant) + 1;
-                }
+                // ✅ Move to next participant
+                moveToNextParticipant(participant);
 
-                console.log('Updated participants list:', participants);
+                console.log('🔄 Updated participants list:', participants);
 
-                // ✅ Wait for a few seconds before moving to the next participant
-                console.log(`Waiting before asking the next member...`);
+                // ✅ Wait before asking the next participant
+                console.log(`⏳ Waiting before asking the next member...`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
             }
 
-            console.log("✅ All team updates collected.");
+            console.log('✅ All team updates collected.');
             await finalStatusUpdates();
         };
+
+        const moveToNextParticipant = (currentParticipant: string) => {
+            const nextIndex = participants.findIndex((p) => p === currentParticipant) + 1;
+            currentIndex = nextIndex < participants.length ? nextIndex : 0;
+        };
+
 
         const finalStatusUpdates = async () => {
             const momPrompt = `You are a Scrum Master summarizing a standup meeting. Based on the transcribed updates from the team, generate a structured Minutes of Meeting (MoM), including:
@@ -346,22 +341,24 @@ Keep it concise (within 3-5 sentences) and easy to understand so that everyone o
     }
 };
 
-const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
+const recordAudioUntilSilence = (filePath, silenceDuration = 3, retryCount = 0) => {
+    const MAX_RETRIES = 2;
+
     return new Promise((resolve, reject) => {
-        console.log(`Recording audio to ${filePath}...`);
+        console.log(`🎙️ Attempt ${retryCount + 1}/${MAX_RETRIES}: Recording audio to ${filePath}...`);
 
         const command = [
             "ffmpeg",
             "-f", "dshow",
             "-i", 'audio="CABLE Output (VB-Audio Virtual Cable)"', // Audio input source
-            "-rtbufsize", "256M", // Increased buffer size
+            "-rtbufsize", "256M",
             "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`,
-            "-t", "300", // Max recording time of 5 minutes (as a safety limit)
-            "-preset", "veryfast", // Optimize for real-time capture
-            "-acodec", "libmp3lame", // MP3 encoding
-            "-b:a", "192k", // Bitrate for better audio quality
-            "-ar", "44100", // Sample rate
-            "-ac", "2", // Stereo output
+            "-t", "300",
+            "-preset", "veryfast",
+            "-acodec", "libmp3lame",
+            "-b:a", "192k",
+            "-ar", "44100",
+            "-ac", "2",
             filePath
         ];
 
@@ -371,36 +368,74 @@ const recordAudioUntilSilence = (filePath, silenceDuration = 3) => {
             const output = data.toString();
 
             if (output.includes("silence_start")) {
-                console.log("Silence detected! Stopping recording...");
+                console.log("🔇 Silence detected! Stopping recording...");
 
-                // Kill process properly
                 if (process.pid) {
                     console.log(`Killing process PID: ${process.pid}`);
-                    exec(`taskkill /PID ${process.pid} /T /F`, (err) => {
+                    exec(`taskkill /PID ${process.pid} /T /F`, async (err) => {
                         if (err) {
-                            console.error("Error killing process:", err);
+                            console.error("❌ Error killing process:", err);
                             reject(err);
                         } else {
-                            console.log("Recording stopped successfully.");
-                            resolve(filePath);
+                            console.log("✅ Recording stopped successfully.");
+                            try {
+                                await validateAudioFile(filePath);
+                                resolve(filePath);
+                            } catch (err) {
+                                if (retryCount < MAX_RETRIES - 1) {
+                                    console.warn(`⚠️ Retrying recording (${retryCount + 2}/${MAX_RETRIES})...`);
+                                    await speak("If you were speaking while muted, please unmute and say it again.");
+                                    // 🔁 Retry recording
+                                    const newPath = await recordAudioUntilSilence(filePath, silenceDuration, retryCount + 1);
+                                    resolve(newPath);
+                                } else {
+                                    console.warn(`🚨 Max retry attempts reached for ${filePath}. Moving on...`);
+                                    resolve(null); // Resolve with null to gracefully handle failure
+                                }
+                            }
                         }
                     });
                 }
             }
         });
 
-        process.on("close", (code) => {
+        process.on("close", async (code) => {
             console.log(`FFmpeg process exited with code ${code}`);
-            resolve(filePath);
+            try {
+                await validateAudioFile(filePath);
+                resolve(filePath);
+            } catch (err) {
+                if (retryCount < MAX_RETRIES - 1) {
+                    console.warn(`⚠️ Retrying recording (${retryCount + 2}/${MAX_RETRIES})...`);
+                    await speak("If you were speaking while muted, please unmute and say it again.");
+                    // 🔁 Retry recording
+                    const newPath = await recordAudioUntilSilence(filePath, silenceDuration, retryCount + 1);
+                    resolve(newPath);
+                } else {
+                    console.warn(`🚨 Max retry attempts reached for ${filePath}. Moving on...`);
+                    resolve(null); // Resolve with null to gracefully handle failure
+                }
+            }
         });
 
         process.on("error", (err) => {
-            console.error("Recording error:", err);
+            console.error("❌ Recording error:", err);
             reject(err);
         });
     });
 };
 
+const validateAudioFile = (filePath) => {
+    return new Promise((resolve, reject) => {
+        const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+        if (fileSize < 1024) { // If size is < 1KB, consider it invalid
+            console.warn(`⚠️ Audio file is too small (${fileSize} bytes). Possibly no input.`);
+            reject(new Error("Audio file is empty or invalid."));
+        } else {
+            resolve(filePath);
+        }
+    });
+};
 
 // Function to transcribe audio using Whisper
 const transcribeAudio = (audioFile, dataFolder) => {
