@@ -12,7 +12,7 @@ const userDataDir = 'C:/Users/rajkumar.selvaraj/AppData/Local/Google/Chrome/User
 // if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
 
 // Load API Key
-const API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyAqRtjEVwJi_2pWr4_H33-sdHi5fgs-LmM';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 // Initialize Gemini API
 const googleAI = new GoogleGenerativeAI(API_KEY);
 const geminiConfig = {
