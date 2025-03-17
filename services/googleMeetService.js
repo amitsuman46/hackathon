@@ -310,7 +310,7 @@ const joinGoogleMeet = async (meetCode) => {
             await finalStatusUpdates();
         };
 
-        const moveToNextParticipant = (currentParticipant: string) => {
+        const moveToNextParticipant = (currentParticipant) => {
             const nextIndex = participants.findIndex((p) => p === currentParticipant) + 1;
             currentIndex = nextIndex < participants.length ? nextIndex : 0;
         };
