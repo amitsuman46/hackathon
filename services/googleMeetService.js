@@ -4,6 +4,7 @@ const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const sendEmail = require('./emailService');
 
 // Configuration
 const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe'; // Adjust path as needed
@@ -41,7 +42,7 @@ initializeChatSession(); // Initialize session on startup
 
 // Updated team members and tasks
 const teamTasks = [
-    // { assignee: 'Rajkumar Selvaraj', task: 'Gather Requirements', status: 'In Progress' },
+    { assignee: 'Rajkumar Selvaraj', task: 'Gather Requirements', status: 'In Progress' },
     { assignee: 'Amit Suman', task: 'UI/UX Design', status: 'In Progress' },
 ];
 
@@ -49,6 +50,22 @@ const teamTasks = [
 let conversationState = {
     currentIndex: 0,
     responses: {},
+};
+
+
+// Function to convert say.speak into a Promise
+const speak = (text) => {
+    return new Promise((resolve, reject) => {
+        say.speak(text, null, 1.0, (err) => {
+            if (err) {
+                console.error("Error speaking:", err);
+                reject(err);
+            } else {
+                console.log("Finished speaking");
+                resolve();
+            }
+        });
+    });
 };
 
 // Function to join Google Meet
@@ -88,7 +105,7 @@ const joinGoogleMeet = async (meetCode) => {
         });
 
         const page = await browser.newPage();
-        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setViewport({ width: 1080, height: 720 });
 
         // Join Google Meet using the provided meeting code
         await page.goto(`https://meet.google.com/${meetCode}`);
@@ -118,11 +135,9 @@ const joinGoogleMeet = async (meetCode) => {
 
         const extractParticipants = async (page) => {
             try {
-                console.log("Extracting participant list...");
                 async function evaluatePage() {
                     return await page.evaluate(() => {
                         const participantList = document.querySelectorAll('[role="list"][aria-label="Participants"] div[role="listitem"]');
-
                         return Array.from(participantList)
                             .map(item => {
                                 const nameElement = item.querySelector('span.zWGUib'); // Specific name class
@@ -133,7 +148,6 @@ const joinGoogleMeet = async (meetCode) => {
                 }
                 // Extract the participant names from the DOM
                 let participants = evaluatePage();
-                console.log(participants, ' ****** ');
                 return participants || [];
             } catch (error) {
                 console.error("Error extracting participants:", error);
@@ -151,9 +165,87 @@ const joinGoogleMeet = async (meetCode) => {
                 participants = tempparticipants;
                 //trigger the function to greet new participants..
             }
-            console.log("Updated participants", participants);
         }, 10000);
         console.log("Participants in the meeting:", participants);
+
+
+
+        // Inject MutationObserver in the page context
+        // await page.evaluate(() => {
+        //     console.log('test 1');
+        //     const observer = new MutationObserver(mutations => {
+        //         console.log('test 1 ******* ******');
+        //         mutations.forEach(mutation => {
+        //             const participants = document.querySelectorAll('.cxdMu.KV1GEc');
+        //             console.log('test 2 ******* ******');
+        //             participants.forEach(participant => {
+        //                 const name = participant.querySelector('.zWGUib')?.innerText;
+        //                 const speakingIcon = participant.querySelector('.IisKdb.GF8M7d.OgVli');
+        //                 console.log('test 3 ******* ******');
+        //                 if (speakingIcon) {
+        //                     console.log('test 4 ******* ******');
+        //                     console.log(`${name} is speaking...`);
+        //                 }
+        //             });
+        //         });
+        //     });
+        //     console.log('test target Node ******* ******');
+        //     const targetNode = document.querySelector('.AE8xFb.OrqRRb.GvcuGe.goTdfd');
+        //     const config = { childList: true, subtree: true, attributes: true };
+        //     console.log('test target Node value ******* ******', targetNode);
+        //     if (targetNode) {
+        //         observer.observe(targetNode, config);
+        //         console.log('Observer started...');
+        //     }
+        // });
+
+        await page.exposeFunction('onSpeakerChange', (name) => {
+            console.log(`${name} is speaking...`);
+        });
+
+        await page.evaluate(() => {
+            const observer = new MutationObserver(mutations => {
+                mutations.forEach(mutation => {
+                    const participants = document.querySelectorAll('.cxdMu.KV1GEc');
+                    participants.forEach(participant => {
+                        const name = participant.querySelector('.zWGUib')?.innerText;
+                        const speakingIcon = participant.querySelector('.IisKdb.GF8M7d.OgVli');
+                        if (speakingIcon && name) {
+                            console.log(`${name} is speaking...`);
+                            // Instead of using window.dispatchEvent, call directly:
+                            //(window as any).onSpeakerChange(name);
+                        }
+                    });
+                });
+            });
+
+            const targetNode = document.querySelector('.AE8xFb.OrqRRb.GvcuGe.goTdfd');
+            const config = { childList: true, subtree: true, attributes: true };
+
+            if (targetNode) {
+                observer.observe(targetNode, config);
+            }
+        });
+
+        // const detectActiveSpeaker = async () => {
+        //     try {
+        //       const activeSpeaker = await page.evaluate(() => {
+        //         const participants = Array.from(document.querySelectorAll('.fm0C7d'));
+        //         const activeElement = participants.find(participant =>
+        //           participant.parentElement.parentElement.parentElement.style.border.includes('rgb(26, 115, 232)') // Detects the Google Meet blue/green border
+        //         );
+        //         return activeElement ? activeElement.innerText : 'No active speaker detected';
+        //       });
+
+        //       console.log('Active Speaker:', activeSpeaker);
+        //     } catch (error) {
+        //       console.error('Error detecting speaker:', error);
+        //     }
+        //   };
+
+        //   // Run detection every 2 seconds
+        //   setInterval(detectActiveSpeaker, 2000);
+
 
         // Speak Welcome Message
         console.log('Bot is speaking...');
@@ -164,72 +256,9 @@ const joinGoogleMeet = async (meetCode) => {
 
 
 
-        // Function to convert say.speak into a Promise
-        const speak = (text) => {
-            return new Promise((resolve, reject) => {
-                say.speak(text, null, 1.0, (err) => {
-                    if (err) {
-                        console.error("Error speaking:", err);
-                        reject(err);
-                    } else {
-                        console.log("Finished speaking");
-                        resolve();
-                    }
-                });
-            });
-        };
+
         let currentIndex = 0;
         // Function to ask for team updates
-        // const askForUpdates = async () => {
-        //     for (const memberDet of teamTasks) {
-        //         const member = memberDet?.assignee;
-        //         // Step 1: Speak to the member
-        //         console.log(`Asking ${member} for task update...`);
-        //         await speak(`${member}, please provide your task update.`);
-
-        //         const audioFile = path.join(dataFolder, `${member}.mp3`);
-
-        //         // Step 2: Record audio until silence
-        //         console.log(`Recording response from ${member}...`);
-        //         try {
-        //             await recordAudioUntilSilence(audioFile, 3);
-        //             console.log(`Audio recording complete for ${member}`);
-        //         } catch (err) {
-        //             console.error(`Error recording audio for ${member}:`, err);
-        //             continue; // Skip to the next member if recording fails
-        //         }
-
-        //         // Step 3: Transcribe the audio
-        //         console.log(`Transcribing audio for ${member}...`);
-        //         let transcription;
-        //         try {
-        //             transcription = await transcribeAudio(audioFile, dataFolder);
-        //             console.log(`${member}'s response: ${transcription}`);
-        //         } catch (err) {
-        //             console.error(`Error transcribing audio for ${member}:`, err);
-        //             continue; // Skip to the next member if transcription fails
-        //         }
-
-        //         // Step 4: Process the response with Gemini AI
-        //         console.log(`Processing response for ${member} with Gemini AI...`);
-        //         try {
-        //             const botResponse = await processWithGeminiTaskUpdate(transcription, memberDet);
-        //             console.log(`Bot response for ${member}: ${botResponse}`);
-
-        //             // Step 5: Speak the bot response
-        //             await speak(botResponse);
-        //         } catch (err) {
-        //             console.error(`Error processing Gemini AI response for ${member}:`, err);
-        //         }
-
-        //         // ✅ Wait for a few seconds before moving to the next member
-        //         console.log(`Waiting before asking the next member...`);
-        //         await new Promise((resolve) => setTimeout(resolve, 2000));
-        //     }
-        //     console.log("All team updates collected.");
-        //     await finalStatusUpdates();
-        // };
-
         const askForUpdates = async () => {
             console.log('🚀 Starting to ask for team updates...');
 
@@ -242,52 +271,54 @@ const joinGoogleMeet = async (meetCode) => {
                 );
 
                 try {
-                    // Step 1: Speak to the member
                     const taskMessage = taskDetail
                         ? `${participant}, please provide an update on your task: ${taskDetail.task}.`
                         : `${participant}, if you have any updates to share in this standup, please speak up and provide them.`;
 
-                    console.log(`🎙️ Speaking to ${participant}...`);
                     await speak(taskMessage);
 
-                    // Step 2: Record audio until silence (⚠️ Handle failure gracefully)
-                    const audioFile = path.join(dataFolder, `${participant}.mp3`);
-                    console.log(`🎧 Recording response from ${participant}...`);
+                    let audioFilePath = null;
+                    let retryCount = 0;
 
-                    try {
-                        await recordAudioUntilSilence(audioFile, 3); // ❗ Fails → Skip participant
-                        console.log(`✅ Audio recording complete for ${participant}`);
-                    } catch (error) {
-                        console.warn(`⚠️ Recording failed for ${participant}:`, error.message);
-                        // 🏃‍♂️ Skip to next participant
+                    while (!audioFilePath && retryCount < 3) {
+                        const [participantName] = participant.split(' ');
+                        // ✅ Create a unique filename for each retry
+                        const audioFile = path.join(dataFolder, `${participantName}_${retryCount + 1}.mp3`);
+
+                        console.log(`🎧 Recording response from ${participantName} (Attempt ${retryCount + 1})...`);
+
+                        audioFilePath = await recordAudioUntilSilence(audioFile, 3, retryCount);
+                        retryCount++;
+
+                        if (!audioFilePath && retryCount < 3) {
+                            console.warn(`⚠️ No valid audio for ${participant}. Retrying...`);
+                            await speak("If you were speaking while muted, please unmute and say it again.");
+                        }
+                    }
+
+                    if (!audioFilePath) {
+                        console.warn(`⚠️ No valid audio for ${participant}. Moving to next person...`);
                         moveToNextParticipant(participant);
                         continue;
                     }
 
-                    // Step 3: Transcribe the audio
-                    console.log(`🔎 Transcribing audio for ${participant}...`);
-                    const transcription = await transcribeAudio(audioFile, dataFolder);
+                    const transcription = await transcribeAudio(audioFilePath, dataFolder);
                     if (!transcription) {
                         console.warn(`⚠️ No transcription available for ${participant}`);
                         moveToNextParticipant(participant);
                         continue;
                     }
-                    console.log(`${participant}'s response: ${transcription}`);
 
-                    // Step 4: Process the response with Gemini AI
                     const prompt = taskDetail
                         ? `You are a Scrum Master conducting a standup meeting. 
-        The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
-        Here is their update: "${transcription}".
-        Acknowledge the update positively and suggest improvements if necessary.`
+                            The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
+                            Here is their update: "${transcription}". Acknowledge the update in a positive manner without asking follow-up questions.`
                         : `You are a Scrum Master conducting a standup meeting.
-        The team member ${participant} shared the following update: "${transcription}".
-        Acknowledge the update positively and suggest improvements if necessary.`;
+                            The team member ${participant} shared the following update: "${transcription}".
+                            Acknowledge the update in a positive manner without asking follow-up questions.`;
 
-                    console.log(`🤖 Processing response for ${participant} with Gemini AI...`);
                     const botResponse = await processWithGeminiTaskUpdate(prompt);
                     if (botResponse) {
-                        console.log(`💬 Bot response for ${participant}: ${botResponse}`);
                         await speak(botResponse);
                     } else {
                         console.warn(`⚠️ No response from Gemini AI for ${participant}`);
@@ -296,12 +327,8 @@ const joinGoogleMeet = async (meetCode) => {
                     console.error(`❌ Error processing update for ${participant}:`, error);
                 }
 
-                // ✅ Move to next participant
                 moveToNextParticipant(participant);
 
-                console.log('🔄 Updated participants list:', participants);
-
-                // ✅ Wait before asking the next participant
                 console.log(`⏳ Waiting before asking the next member...`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
             }
@@ -310,27 +337,47 @@ const joinGoogleMeet = async (meetCode) => {
             await finalStatusUpdates();
         };
 
+
+
+
+
         const moveToNextParticipant = (currentParticipant) => {
             const nextIndex = participants.findIndex((p) => p === currentParticipant) + 1;
-            currentIndex = nextIndex < participants.length ? nextIndex : 0;
+            //currentIndex = nextIndex < participants.length ? nextIndex : 0;
+            currentIndex = nextIndex < participants.length ? nextIndex : participants.length;
         };
 
 
         const finalStatusUpdates = async () => {
-            const momPrompt = `You are a Scrum Master summarizing a standup meeting. Based on the transcribed updates from the team, generate a structured Minutes of Meeting (MoM), including:
-Individual Updates – Summarize progress shared by each team member.
-Team Progress – Highlight overall progress towards sprint goals.
-Blockers & Challenges – List any reported blockers or dependencies.
-Areas for Improvement – Suggest process enhancements or action items.
-Format the response in a clear and concise email addressed to the manager, ensuring professionalism and readability. Conclude with next steps and any required follow-ups.`;
+            const getTodayDate = () => `${String(new Date().getDate()).padStart(2, '0')}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${new Date().getFullYear()}`;
+            const momPrompt = `As a Scrum Master, summarize the standup meeting based on the transcribed team updates. Create a structured Minutes of Meeting (MoM) dated ${getTodayDate()} that includes:
+
+Individual Updates – Summarize the progress reported by each team member.
+Team Progress – Outline the overall progress toward sprint goals.
+Blockers & Challenges – List any identified blockers or dependencies.
+Areas for Improvement – Recommend process improvements or action items.
+Format the MoM as a clear and professional email, addressing it to 'Dear All' instead of the manager's name. Do not include a subject line. Ensure it is concise and easy to read. Conclude with next steps and any necessary follow-ups.
+
+Note: Generate a Meeting Minutes (MoM) summary based on the Chat Session History. If no Chat Session History exists, indicate 'No participants joined today's stand-up meeting' and provide a short elaboration without including a subject line or '[Your Name]'.`;
             const botMOMUpdate = await processWithGeminiFinalStatusUpdate(momPrompt);
+            sendEmail('rajkumarselvaraj93@gmail.com,amit.suman456@gmail.com', 'Daily Scrum Meeting Minutes', botMOMUpdate)
+                .then(() => console.log('Email sent'))
+                .catch(err => console.error('Error:', err));
             console.log('botMOMUpdate ', botMOMUpdate);
-            const finalStatusPrompt = `You are a Scrum Master summarizing today's standup meeting. Provide a brief and clear verbal summary covering:
-Overall Team Progress – Key milestones achieved.
-Individual Highlights – Notable updates from team members.
-Blockers & Challenges – Any issues requiring attention.
+            const finalStatusPrompt = `As a Scrum Master, summarize today's standup meeting with a brief and clear verbal update covering:
+
+Overall Team Progress – Key milestones and achievements.
+Individual Highlights – Important updates from team members.
+Blockers & Challenges – Issues that need resolution or attention.
 Next Steps – Immediate action items and priorities.
-Keep it concise (within 3-5 sentences) and easy to understand so that everyone on the call is aligned.`;
+Keep the summary concise (3-5 sentences) and straightforward to ensure everyone on the call is aligned.
+
+Note:
+
+Base the summary strictly on the Chat Session History.
+If no Chat Session History exists, respond with: 'No participants joined today's stand-up meeting.'
+Do not generate or mention any team member names unless explicitly mentioned in the Chat Session History.
+Avoid adding irrelevant or fabricated details`;
             const botFinalStatusUpdate = await processWithGeminiFinalStatusUpdate(finalStatusPrompt);
             console.log('botFinalStatusUpdate ', botFinalStatusUpdate);
             say.speak(botFinalStatusUpdate);
@@ -341,101 +388,77 @@ Keep it concise (within 3-5 sentences) and easy to understand so that everyone o
     }
 };
 
-const recordAudioUntilSilence = (filePath, silenceDuration = 3, retryCount = 0) => {
-    const MAX_RETRIES = 2;
-
-    return new Promise((resolve, reject) => {
-        console.log(`🎙️ Attempt ${retryCount + 1}/${MAX_RETRIES}: Recording audio to ${filePath}...`);
-
-        const command = [
-            "ffmpeg",
-            "-f", "dshow",
-            "-i", 'audio="CABLE Output (VB-Audio Virtual Cable)"', // Audio input source
-            "-rtbufsize", "256M",
-            "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`,
-            "-t", "300",
-            "-preset", "veryfast",
-            "-acodec", "libmp3lame",
-            "-b:a", "192k",
-            "-ar", "44100",
-            "-ac", "2",
-            filePath
-        ];
-
-        const process = spawn(command[0], command.slice(1), { shell: true });
-
-        process.stderr.on("data", (data) => {
-            const output = data.toString();
-
-            if (output.includes("silence_start")) {
-                console.log("🔇 Silence detected! Stopping recording...");
-
-                if (process.pid) {
-                    console.log(`Killing process PID: ${process.pid}`);
-                    exec(`taskkill /PID ${process.pid} /T /F`, async (err) => {
-                        if (err) {
-                            console.error("❌ Error killing process:", err);
-                            reject(err);
-                        } else {
-                            console.log("✅ Recording stopped successfully.");
-                            try {
-                                await validateAudioFile(filePath);
-                                resolve(filePath);
-                            } catch (err) {
-                                if (retryCount < MAX_RETRIES - 1) {
-                                    console.warn(`⚠️ Retrying recording (${retryCount + 2}/${MAX_RETRIES})...`);
-                                    await speak("If you were speaking while muted, please unmute and say it again.");
-                                    // 🔁 Retry recording
-                                    const newPath = await recordAudioUntilSilence(filePath, silenceDuration, retryCount + 1);
-                                    resolve(newPath);
-                                } else {
-                                    console.warn(`🚨 Max retry attempts reached for ${filePath}. Moving on...`);
-                                    resolve(null); // Resolve with null to gracefully handle failure
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        });
-
-        process.on("close", async (code) => {
-            console.log(`FFmpeg process exited with code ${code}`);
-            try {
-                await validateAudioFile(filePath);
-                resolve(filePath);
-            } catch (err) {
-                if (retryCount < MAX_RETRIES - 1) {
-                    console.warn(`⚠️ Retrying recording (${retryCount + 2}/${MAX_RETRIES})...`);
-                    await speak("If you were speaking while muted, please unmute and say it again.");
-                    // 🔁 Retry recording
-                    const newPath = await recordAudioUntilSilence(filePath, silenceDuration, retryCount + 1);
-                    resolve(newPath);
-                } else {
-                    console.warn(`🚨 Max retry attempts reached for ${filePath}. Moving on...`);
-                    resolve(null); // Resolve with null to gracefully handle failure
-                }
-            }
-        });
-
-        process.on("error", (err) => {
-            console.error("❌ Recording error:", err);
-            reject(err);
-        });
-    });
-};
+ const recordAudioUntilSilence = (filePath, silenceDuration = 2, retryCount = 0) => {
+     return new Promise((resolve) => {
+         console.log(`🎙️ Attempt ${retryCount + 1}/3: Recording audio to ${filePath}...`);
+         const command = [
+             "ffmpeg",
+             "-f", "dshow",
+             "-i", 'audio="CABLE Output (VB-Audio Virtual Cable)"',
+             "-rtbufsize", "256M",
+             "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`,
+             "-t", "300",
+             "-preset", "ultrafast",
+             "-acodec", "libmp3lame",
+             "-b:a", "192k",
+             "-ar", "44100",
+             "-ac", "2",
+             filePath
+         ];
+         const process = spawn(command[0], command.slice(1), { shell: true });
+         process.stderr.on("data", (data) => {
+             const output = data.toString();
+             console.log(output);
+             if (output.includes("silence_start")) {
+                 console.log("🔇 Silence detected! Stopping recording...");
+                 if (process.pid) {
+                     exec(`taskkill /PID ${process.pid} /T /F`, async (err) => {
+                         if (err) {
+                             console.error("❌ Error killing process:", err);
+                             resolve(null); // ✅ Resolve null instead of rejecting
+                         } else {
+                             console.log("✅ Recording stopped successfully.");
+                             try {
+                                 await validateAudioFile(filePath);
+                                 resolve(filePath);
+                             } catch (err) {
+                                 console.warn(`⚠️ Audio validation failed: ${err?.message || 'Unknown error'}`);
+                                 resolve(null); // ✅ Resolve with null instead of rejecting
+                             }
+                         }
+                     });
+                 }
+             }
+         });
+         process.on("close", async (code) => {
+             console.log(`FFmpeg process exited with code ${code}`);
+             try {
+                 await validateAudioFile(filePath);
+                 resolve(filePath);
+             } catch (err) {
+                 console.warn(`⚠️ Audio validation failed: ${err?.message || 'Unknown error'}`);
+                 resolve(null); // ✅ Resolve with null instead of rejecting
+             }
+         });
+         process.on("error", (err) => {
+             console.error("❌ Recording error:", err);
+             resolve(null); // ✅ Resolve with null instead of rejecting
+         });
+     });
+ };
 
 const validateAudioFile = (filePath) => {
     return new Promise((resolve, reject) => {
         const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-        if (fileSize < 1024) { // If size is < 1KB, consider it invalid
+        if (fileSize < 1024) {
             console.warn(`⚠️ Audio file is too small (${fileSize} bytes). Possibly no input.`);
-            reject(new Error("Audio file is empty or invalid."));
+            reject(null); // ✅ Return `null` to signal empty input
         } else {
             resolve(filePath);
         }
     });
 };
+
 
 // Function to transcribe audio using Whisper
 const transcribeAudio = (audioFile, dataFolder) => {
@@ -493,9 +516,7 @@ const processWithGeminiTaskUpdate = async (prompt) => {
 const processWithGeminiFinalStatusUpdate = async (prompt) => {
     try {
         const result = await chatSession.sendMessage(prompt);
-        //const result = await geminiModel.generateContent(prompt);
         const geminiResponse = result.response.text();
-        console.log('gemini Response final status update & MOM ' + geminiResponse)
         return geminiResponse;
     } catch (error) {
         console.error('Error fetching response from Gemini API:', error);
