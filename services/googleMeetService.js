@@ -1,49 +1,24 @@
 const puppeteer = require('puppeteer');
 const say = require('say');
-const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { processWithGeminiTaskUpdate,
+    processWithGeminiFinalStatusUpdate } = require('./geminiAIService');
+const {
+    recordAudioUntilSilence,
+    transcribeAudio, speak
+} = require('./audioService');
 const sendEmail = require('./emailService');
 
 // Configuration
 const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe'; // Adjust path as needed
 const userDataDir = 'C:/Users/rajkumar.selvaraj/AppData/Local/Google/Chrome/User Data/Default'; // Change based on your profile
-// const dataFolder = path.join(__dirname, 'data');
-// if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
-
-// Load API Key
-const API_KEY = process.env.GEMINI_API_KEY || '';
-// Initialize Gemini API
-const googleAI = new GoogleGenerativeAI(API_KEY);
-const geminiConfig = {
-    temperature: 0.9,
-    topP: 1,
-    topK: 1,
-    maxOutputTokens: 4096,
-};
-// const geminiModel = googleAI.getGenerativeModel({ model: 'gemini-1.5-flash', geminiConfig });
-// const chatSession = geminiModel.startChat({
-//     history: [], // Stores conversation history
-//     generationConfig: geminiConfig,
-// });
-
-let chatSession;
-
-const initializeChatSession = () => {
-    chatSession = geminiModel.startChat({
-        history: [], // Initialize history
-        generationConfig: geminiConfig,
-    });
-};
-
-const geminiModel = googleAI.getGenerativeModel({ model: 'gemini-1.5-flash', geminiConfig });
-initializeChatSession(); // Initialize session on startup
 
 // Updated team members and tasks
 const teamTasks = [
     { assignee: 'Rajkumar Selvaraj', task: 'Gather Requirements', status: 'In Progress' },
     { assignee: 'Amit Suman', task: 'UI/UX Design', status: 'In Progress' },
+    { assignee: 'likitha', task: 'QA Automation', status: 'In Progress' },
 ];
 
 // Conversation state
@@ -53,20 +28,7 @@ let conversationState = {
 };
 
 
-// Function to convert say.speak into a Promise
-const speak = (text) => {
-    return new Promise((resolve, reject) => {
-        say.speak(text, null, 1.0, (err) => {
-            if (err) {
-                console.error("Error speaking:", err);
-                reject(err);
-            } else {
-                console.log("Finished speaking");
-                resolve();
-            }
-        });
-    });
-};
+
 
 // Function to join Google Meet
 const joinGoogleMeet = async (meetCode) => {
@@ -104,7 +66,7 @@ const joinGoogleMeet = async (meetCode) => {
             ]
         });
 
-        const page = await browser.newPage();
+        let page = await browser.newPage();
         await page.setViewport({ width: 1080, height: 720 });
 
         // Join Google Meet using the provided meeting code
@@ -158,7 +120,8 @@ const joinGoogleMeet = async (meetCode) => {
         // Extract participant list
         let participants = await extractParticipants(page);
         //keep checking after every min.
-        setInterval(async () => {
+        let ClearParticipantsInt = null;
+        ClearParticipantsInt = setInterval(async () => {
             let tempparticipants = await extractParticipants(page);
             let checkNewParticipants = participants.join() === tempparticipants.join();
             if (!checkNewParticipants) {
@@ -168,52 +131,73 @@ const joinGoogleMeet = async (meetCode) => {
         }, 10000);
         console.log("Participants in the meeting:", participants);
 
+        let currentRecognition = null;
+        let lastSpeaker = '';
+        let speakerSwitchTimeout = null;
 
+        await page.exposeFunction('onSpeechResult', (name, text) => {
+            console.log(`${name} said: "${text}"`);
+        });
 
-        // Inject MutationObserver in the page context
-        // await page.evaluate(() => {
-        //     console.log('test 1');
-        //     const observer = new MutationObserver(mutations => {
-        //         console.log('test 1 ******* ******');
-        //         mutations.forEach(mutation => {
-        //             const participants = document.querySelectorAll('.cxdMu.KV1GEc');
-        //             console.log('test 2 ******* ******');
-        //             participants.forEach(participant => {
-        //                 const name = participant.querySelector('.zWGUib')?.innerText;
-        //                 const speakingIcon = participant.querySelector('.IisKdb.GF8M7d.OgVli');
-        //                 console.log('test 3 ******* ******');
-        //                 if (speakingIcon) {
-        //                     console.log('test 4 ******* ******');
-        //                     console.log(`${name} is speaking...`);
-        //                 }
-        //             });
-        //         });
-        //     });
-        //     console.log('test target Node ******* ******');
-        //     const targetNode = document.querySelector('.AE8xFb.OrqRRb.GvcuGe.goTdfd');
-        //     const config = { childList: true, subtree: true, attributes: true };
-        //     console.log('test target Node value ******* ******', targetNode);
-        //     if (targetNode) {
-        //         observer.observe(targetNode, config);
-        //         console.log('Observer started...');
-        //     }
-        // });
+        await page.exposeFunction('onSpeakerChange', async (name) => {
+            if (name === lastSpeaker) return; // Ignore if same speaker
+            lastSpeaker = name;
 
-        await page.exposeFunction('onSpeakerChange', (name) => {
-            console.log(`${name} is speaking...`);
+            // Debounce to prevent rapid switching
+            if (speakerSwitchTimeout) clearTimeout(speakerSwitchTimeout);
+
+            speakerSwitchTimeout = setTimeout(async () => {
+                console.log(`${name} is speaking...`);
+
+                // Stop previous recognition before starting a new one
+                if (currentRecognition) {
+                    currentRecognition.stop();
+                    console.log(`Stopped previous recognition for ${lastSpeaker}`);
+                }
+
+                await page.evaluate((speaker) => {
+                    // Stop existing recognition (if any)
+                    if (window['currentRecognition']) {
+                        window['currentRecognition'].stop();
+                    }
+
+                    const recognition = new (window['SpeechRecognition'] || window['webkitSpeechRecognition'])();
+                    recognition.lang = 'en-US';
+                    recognition.interimResults = false;
+                    recognition.continuous = true;
+
+                    recognition.onresult = (event) => {
+                        const transcript = event.results[event.results.length - 1][0].transcript;
+                        console.log(`${speaker} said: "${transcript}"`);
+                        window['onSpeechResult'](speaker, transcript);
+                    };
+
+                    recognition.onerror = (event) => {
+                        console.error(`Error in recognition for ${speaker}:`, event.error);
+                    };
+
+                    recognition.start();
+                    console.log(`Speech recognition started for ${speaker}`);
+
+                    // Store recognition instance on window to manage conflicts
+                    window['currentRecognition'] = recognition;
+                }, name);
+            }, 500); // 500ms debounce time
         });
 
         await page.evaluate(() => {
+            let lastSpeaker = '';
             const observer = new MutationObserver(mutations => {
                 mutations.forEach(mutation => {
                     const participants = document.querySelectorAll('.cxdMu.KV1GEc');
                     participants.forEach(participant => {
                         const name = participant.querySelector('.zWGUib')?.innerText;
                         const speakingIcon = participant.querySelector('.IisKdb.GF8M7d.OgVli');
-                        if (speakingIcon && name) {
-                            console.log(`${name} is speaking...`);
-                            // Instead of using window.dispatchEvent, call directly:
-                            //(window as any).onSpeakerChange(name);
+
+                        // If a new speaker starts, trigger recognition
+                        if (speakingIcon && name && name !== lastSpeaker) {
+                            lastSpeaker = name;
+                            window['onSpeakerChange'](name);
                         }
                     });
                 });
@@ -224,133 +208,26 @@ const joinGoogleMeet = async (meetCode) => {
 
             if (targetNode) {
                 observer.observe(targetNode, config);
+                console.log('Observer started...');
             }
         });
-
-        // const detectActiveSpeaker = async () => {
-        //     try {
-        //       const activeSpeaker = await page.evaluate(() => {
-        //         const participants = Array.from(document.querySelectorAll('.fm0C7d'));
-        //         const activeElement = participants.find(participant =>
-        //           participant.parentElement.parentElement.parentElement.style.border.includes('rgb(26, 115, 232)') // Detects the Google Meet blue/green border
-        //         );
-        //         return activeElement ? activeElement.innerText : 'No active speaker detected';
-        //       });
-
-        //       console.log('Active Speaker:', activeSpeaker);
-        //     } catch (error) {
-        //       console.error('Error detecting speaker:', error);
-        //     }
-        //   };
-
-        //   // Run detection every 2 seconds
-        //   setInterval(detectActiveSpeaker, 2000);
 
 
         // Speak Welcome Message
         console.log('Bot is speaking...');
-        say.speak("Hello Team, Good morning! Let's start our Scrum meeting.", null, 1.0, async () => {
-            await askForUpdates();
-            //await finalStatusUpdates();
-        });
 
-
-
-
-        let currentIndex = 0;
-        // Function to ask for team updates
-        const askForUpdates = async () => {
-            console.log('🚀 Starting to ask for team updates...');
-
-            while (currentIndex < participants.length) {
-                const participant = participants[currentIndex];
-                console.log(`🗣️ Asking ${participant} for task update...`);
-
-                const taskDetail = teamTasks.find(
-                    (task) => task.assignee.toLowerCase() === participant.toLowerCase()
-                );
-
-                try {
-                    const taskMessage = taskDetail
-                        ? `${participant}, please provide an update on your task: ${taskDetail.task}.`
-                        : `${participant}, if you have any updates to share in this standup, please speak up and provide them.`;
-
-                    await speak(taskMessage);
-
-                    let audioFilePath = null;
-                    let retryCount = 0;
-
-                    while (!audioFilePath && retryCount < 3) {
-                        const [participantName] = participant.split(' ');
-                        // ✅ Create a unique filename for each retry
-                        const audioFile = path.join(dataFolder, `${participantName}_${retryCount + 1}.mp3`);
-
-                        console.log(`🎧 Recording response from ${participantName} (Attempt ${retryCount + 1})...`);
-
-                        audioFilePath = await recordAudioUntilSilence(audioFile, 3, retryCount);
-                        retryCount++;
-
-                        if (!audioFilePath && retryCount < 3) {
-                            console.warn(`⚠️ No valid audio for ${participant}. Retrying...`);
-                            await speak("If you were speaking while muted, please unmute and say it again.");
-                        }
-                    }
-
-                    if (!audioFilePath) {
-                        console.warn(`⚠️ No valid audio for ${participant}. Moving to next person...`);
-                        moveToNextParticipant(participant);
-                        continue;
-                    }
-
-                    const transcription = await transcribeAudio(audioFilePath, dataFolder);
-                    if (!transcription) {
-                        console.warn(`⚠️ No transcription available for ${participant}`);
-                        moveToNextParticipant(participant);
-                        continue;
-                    }
-
-                    const prompt = taskDetail
-                        ? `You are a Scrum Master conducting a standup meeting. 
-                            The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
-                            Here is their update: "${transcription}". Acknowledge the update in a positive manner without asking follow-up questions.`
-                        : `You are a Scrum Master conducting a standup meeting.
-                            The team member ${participant} shared the following update: "${transcription}".
-                            Acknowledge the update in a positive manner without asking follow-up questions.`;
-
-                    const botResponse = await processWithGeminiTaskUpdate(prompt);
-                    if (botResponse) {
-                        await speak(botResponse);
-                    } else {
-                        console.warn(`⚠️ No response from Gemini AI for ${participant}`);
-                    }
-                } catch (error) {
-                    console.error(`❌ Error processing update for ${participant}:`, error);
-                }
-
-                moveToNextParticipant(participant);
-
-                console.log(`⏳ Waiting before asking the next member...`);
-                await new Promise((resolve) => setTimeout(resolve, 2000));
-            }
-
-            console.log('✅ All team updates collected.');
-            await finalStatusUpdates();
-        };
-
-
-
-
+        await speak("Hello Team, Good morning! Let's start our Scrum meeting.");
 
         const moveToNextParticipant = (currentParticipant) => {
             const nextIndex = participants.findIndex((p) => p === currentParticipant) + 1;
-            //currentIndex = nextIndex < participants.length ? nextIndex : 0;
             currentIndex = nextIndex < participants.length ? nextIndex : participants.length;
         };
 
 
         const finalStatusUpdates = async () => {
-            const getTodayDate = () => `${String(new Date().getDate()).padStart(2, '0')}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${new Date().getFullYear()}`;
-            const momPrompt = `As a Scrum Master, summarize the standup meeting based on the transcribed team updates. Create a structured Minutes of Meeting (MoM) dated ${getTodayDate()} that includes:
+            try {
+                const getTodayDate = () => `${String(new Date().getDate()).padStart(2, '0')}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${new Date().getFullYear()}`;
+                const momPrompt = `As a Scrum Master, summarize the standup meeting based on the transcribed team updates. Create a structured Minutes of Meeting (MoM) dated ${getTodayDate()} that includes:
 
 Individual Updates – Summarize the progress reported by each team member.
 Team Progress – Outline the overall progress toward sprint goals.
@@ -359,12 +236,12 @@ Areas for Improvement – Recommend process improvements or action items.
 Format the MoM as a clear and professional email, addressing it to 'Dear All' instead of the manager's name. Do not include a subject line. Ensure it is concise and easy to read. Conclude with next steps and any necessary follow-ups.
 
 Note: Generate a Meeting Minutes (MoM) summary based on the Chat Session History. If no Chat Session History exists, indicate 'No participants joined today's stand-up meeting' and provide a short elaboration without including a subject line or '[Your Name]'.`;
-            const botMOMUpdate = await processWithGeminiFinalStatusUpdate(momPrompt);
-            sendEmail('rajkumarselvaraj93@gmail.com,amit.suman456@gmail.com', 'Daily Scrum Meeting Minutes', botMOMUpdate)
-                .then(() => console.log('Email sent'))
-                .catch(err => console.error('Error:', err));
-            console.log('botMOMUpdate ', botMOMUpdate);
-            const finalStatusPrompt = `As a Scrum Master, summarize today's standup meeting with a brief and clear verbal update covering:
+                const botMOMUpdate = await processWithGeminiFinalStatusUpdate(momPrompt);
+                sendEmail('rajkumarselvaraj93@gmail.com,amit.suman456@gmail.com,lakkojupavanbrahmaji@gmail.com', 'Daily Scrum Meeting Minutes', botMOMUpdate)
+                    .then(() => console.log('Email sent'))
+                    .catch(err => console.error('Error:', err));
+                console.log('botMOMUpdate ', botMOMUpdate);
+                const finalStatusPrompt = `As a Scrum Master, summarize today's standup meeting with a brief and clear verbal update covering:
 
 Overall Team Progress – Key milestones and achievements.
 Individual Highlights – Important updates from team members.
@@ -378,150 +255,147 @@ Base the summary strictly on the Chat Session History.
 If no Chat Session History exists, respond with: 'No participants joined today's stand-up meeting.'
 Do not generate or mention any team member names unless explicitly mentioned in the Chat Session History.
 Avoid adding irrelevant or fabricated details`;
-            const botFinalStatusUpdate = await processWithGeminiFinalStatusUpdate(finalStatusPrompt);
-            console.log('botFinalStatusUpdate ', botFinalStatusUpdate);
-            say.speak(botFinalStatusUpdate);
+                const botFinalStatusUpdate = await processWithGeminiFinalStatusUpdate(finalStatusPrompt);
+                console.log('botFinalStatusUpdate ', botFinalStatusUpdate);
+                await speak(botFinalStatusUpdate + " Thank you all. Let's wrap up this call.");
+            }
+            catch (error) {
+                console.error('Error during final status updates:', error);
+            }
+
         };
+
+        let currentIndex = 0;
+        // Function to ask for team updates
+        const askForUpdates = async () => {
+            console.log('🚀 Starting to ask for team updates...');
+            try {
+                while (currentIndex < participants.length) {
+                    const participant = participants[currentIndex];
+                    console.log(`🗣️ Asking ${participant} for task update...`);
+
+                    const taskDetail = teamTasks.find(
+                        (task) => task.assignee.toLowerCase() === participant.toLowerCase()
+                    );
+
+                    try {
+                        const taskMessage = taskDetail
+                            ? `${participant}, please provide an update on your task: ${taskDetail.task}.`
+                            : `${participant}, if you have any updates to share in this standup, please speak up and provide them.`;
+
+                        await speak(taskMessage);
+
+                        let audioFilePath = null;
+                        let retryCount = 0;
+
+                        while (!audioFilePath && retryCount < 3) {
+                            const [participantName] = participant.split(' ');
+                            // ✅ Create a unique filename for each retry
+                            const audioFile = path.join(dataFolder, `${participantName}_${retryCount + 1}.mp3`);
+
+                            console.log(`🎧 Recording response from ${participantName} (Attempt ${retryCount + 1})...`);
+
+                            audioFilePath = await recordAudioUntilSilence(audioFile, 3, retryCount);
+                            retryCount++;
+
+                            if (!audioFilePath && retryCount < 3) {
+                                console.warn(`⚠️ No valid audio for ${participant}. Retrying...`);
+                                await speak("If you were speaking while muted, please unmute and say it again.");
+                            }
+                        }
+
+                        if (!audioFilePath) {
+                            console.warn(`⚠️ No valid audio for ${participant}. Moving to next person...`);
+                            moveToNextParticipant(participant);
+                            continue;
+                        }
+
+                        const transcription = await transcribeAudio(audioFilePath, dataFolder);
+                        if (!transcription) {
+                            console.warn(`⚠️ No transcription available for ${participant}`);
+                            moveToNextParticipant(participant);
+                            continue;
+                        }
+
+                        const prompt = taskDetail
+                            ? `You are a Scrum Master conducting a standup meeting. 
+                            The team member ${taskDetail.assignee} is working on the task: "${taskDetail.task}".
+                            Here is their update: "${transcription}". Acknowledge the update in a positive manner without asking follow-up questions.`
+                            : `You are a Scrum Master conducting a standup meeting.
+                            The team member ${participant} shared the following update: "${transcription}".
+                            Acknowledge the update in a positive manner without asking follow-up questions.`;
+
+                        const botResponse = await processWithGeminiTaskUpdate(prompt);
+                        if (botResponse) {
+                            await speak(botResponse);
+                        } else {
+                            console.warn(`⚠️ No response from Gemini AI for ${participant}`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ Error processing update for ${participant}:`, error);
+                    }
+
+                    moveToNextParticipant(participant);
+
+                    console.log(`⏳ Waiting before asking the next member...`);
+                    await new Promise((resolve) => setTimeout(resolve, 2000));
+                }
+
+                console.log('✅ All team updates collected.');
+            }
+            catch (err) {
+                console.log(err, ' ask for update func');
+            }
+        };
+
+        await askForUpdates();
+
+        await finalStatusUpdates();
+
+        await page.evaluate(() => {
+            console.log('Speech recognition and observer.');
+            if (window['currentRecognition']) {
+                window['currentRecognition'].stop();
+                console.log('Speech recognition stopped.');
+            }
+            if (window['observerInstance']) {
+                window['observerInstance'].disconnect();
+                console.log('MutationObserver disconnected.');
+            }
+        });
+        if (currentRecognition) {
+            currentRecognition.stop();
+            console.log('✅ Speech recognition stopped.');
+        }
+        if (speakerSwitchTimeout) {
+            clearTimeout(speakerSwitchTimeout);
+            console.log('✅ Speaker switch timeout cleared.');
+        }
+        if (ClearParticipantsInt) {
+            clearInterval(ClearParticipantsInt);
+            console.log('✅ clear participant interval cleared.');
+        }
+        // Use page.evaluateHandle to safely stop observer inside the browser
+        const observerHandle = await page.evaluateHandle(() => {
+            if (window['observerInstance']) {
+                window['observerInstance'].disconnect();
+                console.log('✅ MutationObserver disconnected.');
+            }
+            return true;
+        });
+        // Dispose the handle
+        await observerHandle.dispose();
+
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+        console.log('✅ Closing browser...');
+        await browser.close();
+        console.log('🛑 Browser closed. Meeting left successfully.');
 
     } catch (error) {
         console.error('Error in Google Meet bot:', error);
     }
 };
 
- const recordAudioUntilSilence = (filePath, silenceDuration = 2, retryCount = 0) => {
-     return new Promise((resolve) => {
-         console.log(`🎙️ Attempt ${retryCount + 1}/3: Recording audio to ${filePath}...`);
-         const command = [
-             "ffmpeg",
-             "-f", "dshow",
-             "-i", 'audio="CABLE Output (VB-Audio Virtual Cable)"',
-             "-rtbufsize", "256M",
-             "-af", `silencedetect=noise=-30dB:d=${silenceDuration}`,
-             "-t", "300",
-             "-preset", "ultrafast",
-             "-acodec", "libmp3lame",
-             "-b:a", "192k",
-             "-ar", "44100",
-             "-ac", "2",
-             filePath
-         ];
-         const process = spawn(command[0], command.slice(1), { shell: true });
-         process.stderr.on("data", (data) => {
-             const output = data.toString();
-             console.log(output);
-             if (output.includes("silence_start")) {
-                 console.log("🔇 Silence detected! Stopping recording...");
-                 if (process.pid) {
-                     exec(`taskkill /PID ${process.pid} /T /F`, async (err) => {
-                         if (err) {
-                             console.error("❌ Error killing process:", err);
-                             resolve(null); // ✅ Resolve null instead of rejecting
-                         } else {
-                             console.log("✅ Recording stopped successfully.");
-                             try {
-                                 await validateAudioFile(filePath);
-                                 resolve(filePath);
-                             } catch (err) {
-                                 console.warn(`⚠️ Audio validation failed: ${err?.message || 'Unknown error'}`);
-                                 resolve(null); // ✅ Resolve with null instead of rejecting
-                             }
-                         }
-                     });
-                 }
-             }
-         });
-         process.on("close", async (code) => {
-             console.log(`FFmpeg process exited with code ${code}`);
-             try {
-                 await validateAudioFile(filePath);
-                 resolve(filePath);
-             } catch (err) {
-                 console.warn(`⚠️ Audio validation failed: ${err?.message || 'Unknown error'}`);
-                 resolve(null); // ✅ Resolve with null instead of rejecting
-             }
-         });
-         process.on("error", (err) => {
-             console.error("❌ Recording error:", err);
-             resolve(null); // ✅ Resolve with null instead of rejecting
-         });
-     });
- };
-
-const validateAudioFile = (filePath) => {
-    return new Promise((resolve, reject) => {
-        const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-        if (fileSize < 1024) {
-            console.warn(`⚠️ Audio file is too small (${fileSize} bytes). Possibly no input.`);
-            reject(null); // ✅ Return `null` to signal empty input
-        } else {
-            resolve(filePath);
-        }
-    });
-};
-
-
-// Function to transcribe audio using Whisper
-const transcribeAudio = (audioFile, dataFolder) => {
-    return new Promise((resolve, reject) => {
-
-        const command = `whisper "${audioFile}" --model tiny.en --output_dir "${dataFolder}" --language English --fp16 False --output_format txt`;
-
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                reject(`Error: ${error.message}`);
-            } else if (stderr) {
-                console.log(`Warning: ${stderr}`);
-            }
-            resolve(stdout);
-        });
-    });
-};
-
-// Function to process response with Gemini AI (Placeholder)
-const processWithGeminiTaskUpdate = async (prompt) => {
-    try {
-        if (!chatSession) {
-            console.error("Chat session not initialized. Re-initializing...");
-            initializeChatSession();
-        }
-        const result = await chatSession.sendMessage(prompt);
-        //const result = await geminiModel.generateContent(prompt);
-        const geminiResponse = result.response.text();
-        if (chatSession.history) {
-            chatSession.history.push({
-                role: memberDetail.assignee,
-                parts: [{ text: prompt }],
-            });
-            chatSession.history.push({
-                role: 'model',
-                parts: [{ text: geminiResponse }],
-            });
-        } else {
-            console.warn('Chat session history is undefined');
-        }
-        // let nextQuestion = '';
-        // const followUpQuestionRegex = /(\?|could you|can you|would you|please clarify|elaborate|provide more details)/i;
-        // if (!followUpQuestionRegex.test(geminiResponse)) {
-        //     conversationState.currentIndex++;
-        //     // Ask the next team member or conclude standup
-        //     nextQuestion = await askTeamMember();
-        // }
-        console.log('gemini Response ' + geminiResponse)
-        return geminiResponse;
-    } catch (error) {
-        console.error('Error fetching response from Gemini API:', error);
-    }
-};
-
-const processWithGeminiFinalStatusUpdate = async (prompt) => {
-    try {
-        const result = await chatSession.sendMessage(prompt);
-        const geminiResponse = result.response.text();
-        return geminiResponse;
-    } catch (error) {
-        console.error('Error fetching response from Gemini API:', error);
-    }
-};
 
 // Export function
 module.exports = { joinGoogleMeet };
