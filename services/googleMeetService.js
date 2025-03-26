@@ -1,5 +1,4 @@
 const puppeteer = require('puppeteer');
-const say = require('say');
 const fs = require('fs');
 const path = require('path');
 const { processWithGeminiTaskUpdate,

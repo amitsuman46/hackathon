@@ -94,7 +94,7 @@ const transcribeAudio = (audioFile, dataFolder) => {
 // Function to convert say.speak into a Promise
 const speak = (text) => {
     return new Promise((resolve, reject) => {
-        say.speak(text, null, 1.0, (err) => {
+        say.speak(text, 'Microsoft Zira Desktop', 1.0, (err) => {
             if (err) {
                 console.error("Error speaking:", err);
                 reject(err);

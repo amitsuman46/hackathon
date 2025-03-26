@@ -14,11 +14,12 @@ const transporter = nodemailer.createTransport({
 
 
 // Function to send an email with async/await and error handling
-const sendEmail = async (to, subject, text) => {
+const sendEmail = async (to, cc, subject, text) => {
   // Define email options
   const mailOptions = {
     from: '"Virtual Scrum Master" <scrummaster456@outlook.com>', // sender address
     to: to, // list of receivers
+    cc: cc,
     subject: subject, // Subject line
     text: text, // plain text body
   };
