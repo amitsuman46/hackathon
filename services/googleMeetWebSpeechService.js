@@ -333,7 +333,7 @@ Format the MoM as a clear and professional email, addressing it to 'Dear All' in
 
 Note: Generate a Meeting Minutes (MoM) summary based on the Chat Session History. If no Chat Session History exists, indicate 'Either no participants joined today's stand-up meeting, or there were audio issues.' and provide a short elaboration without including a subject line or '[Your Name]'.`;
                 const botMOMUpdate = await processWithGeminiFinalStatusUpdate(momPrompt);
-                sendEmail('rajkumarselvaraj93@gmail.com,amit.suman456@gmail.com,lakkojupavanbrahmaji@gmail.com', 'Daily Scrum Meeting Minutes', botMOMUpdate)
+                sendEmail(managerDetails?.email, '', 'Daily Scrum Meeting Minutes', botMOMUpdate)
                     .then(() => console.log('Email sent'))
                     .catch(err => console.error('Error:', err));
                 console.log('botMOMUpdate ', botMOMUpdate);
